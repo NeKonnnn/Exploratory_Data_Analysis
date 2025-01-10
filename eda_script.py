@@ -528,21 +528,13 @@ class EDAProcessor:
                             spearman_value >= threshold or
                             kendall_value >= threshold):
 
-                            # Рассчитываем среднее значение корреляций
-                            mean_correlation = (pearson_value + spearman_value + kendall_value) / 3
-                            final_cheddock = cheddock_scale(mean_correlation)
-
                             correlated_pairs.append({
                                 "Признак 1": col1,
                                 "Признак 2": col2,
                                 "Корреляция Пирсона": round(pearson_value * 100, 2),
                                 "Вывод по шкале Чеддока (Пирсон)": cheddock_scale(pearson_value),
                                 "Корреляция Спирмена": round(spearman_value * 100, 2),
-                                "Вывод по шкале Чеддока (Спирмен)": cheddock_scale(spearman_value),
-                                "Корреляция Кендала": round(kendall_value * 100, 2),
-                                "Вывод по шкале Чеддока (Кендал)": cheddock_scale(kendall_value),
-                                "Средняя корреляция": round(mean_correlation * 100, 2),
-                                "Итоговый вывод по шкале Чеддока": final_cheddock
+                                "Корреляция Кендала": round(kendall_value * 100, 2)
                             })
                             processed_pairs.add((col1, col2))
 
