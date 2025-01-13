@@ -109,3 +109,4 @@ summaries = {
 }
 eda.save_all_summaries_to_excel(summaries)
 ```
+![Полная таблица Excell](DATA_OUT/graphics/excell_graphics.g.jpg)
