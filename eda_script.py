@@ -259,7 +259,8 @@ class EDAProcessor:
 
     def plot_kde_distributions(self, numeric_columns):
         """
-        Построить гистограммы и графики KDE для всех числовых переменных с улучшенным оформлением и аналитикой.
+        Построить гистограммы и графики KDE для всех числовых переменных с улучшенным оформлением и аналитикой,
+        включая идеальное нормальное распределение.
 
         Параметры:
         numeric_columns (list): Список числовых колонок.
@@ -267,7 +268,7 @@ class EDAProcessor:
         Возвращает:
         pd.DataFrame: Итоговая сводная таблица с аналитикой по признакам.
         """
-        from scipy.stats import kurtosis, skew
+        from scipy.stats import kurtosis, skew, norm
 
         summary_data = []
 
@@ -290,6 +291,11 @@ class EDAProcessor:
                 alpha=0.8,          # Прозрачность столбиков
                 linewidth=1.2       # Толщина линии на краях столбиков
             )
+
+            # Изменение цвета KDE линии
+            kde_color = "darkorange"
+            sns.kdeplot(data, color=kde_color, linewidth=2, label="KDE (плотность)")
+
             plt.title(f"Гистограмма и KDE для признака: {column}", fontsize=14, fontweight="bold")
             plt.xlabel(column, fontsize=12)
             plt.ylabel("Плотность / Частота", fontsize=12)
@@ -298,13 +304,29 @@ class EDAProcessor:
             # Аннотация медианы и среднего
             median = data.median()
             mean = data.mean()
-            plt.axvline(median, color="red", linestyle="--", label=f"Медиана: {median:.2f}")
-            plt.axvline(mean, color="blue", linestyle="-.", label=f"Среднее: {mean:.2f}")
+            std_dev = data.std()
+            plt.axvline(median, color="red", linestyle="--", linewidth=2, label=f"Медиана: {median:.2f}")
+            plt.axvline(mean, color="blue", linestyle="-.", linewidth=2, label=f"Среднее: {mean:.2f}")
+
+            # Добавляем перцентильные линии
+            percentiles = [0.25, 0.75, 0.99]
+            percentile_values = data.quantile(percentiles)
+            perc_colors = ["green", "purple", "brown"]  # Цвета для перцентилей
+            for perc, value, color in zip(percentiles, percentile_values, perc_colors):
+                plt.axvline(value, color=color, linestyle=":", linewidth=2, label=f"{int(perc * 100)}-й перцентиль: {value:.2f}")
+
+            # Добавляем идеальное нормальное распределение
+            try:
+                x_range = np.linspace(data.min(), data.max(), 1000)  # Диапазон значений
+                ideal_pdf = norm.pdf(x_range, loc=mean, scale=std_dev)  # Плотность вероятности нормального распределения
+                ideal_pdf_scaled = ideal_pdf * len(data) * (data.max() - data.min()) / 30  # Масштабируем для совпадения с гистограммой
+                plt.plot(x_range, ideal_pdf_scaled, color="orange", linestyle="--", linewidth=2.5, label="Идеальное распределение")
+            except Exception as e:
+                print(f"Ошибка при построении идеального распределения для столбца {column}: {e}")
 
             # Попробуем вычислить пиковое значение KDE
             try:
                 kde = gaussian_kde(data)
-                x_range = np.linspace(data.min(), data.max(), 1000)  # Диапазон значений для KDE
                 kde_values = kde(x_range)
                 peak_x = x_range[np.argmax(kde_values)]
                 peak_y = kde_values.max()
@@ -316,7 +338,7 @@ class EDAProcessor:
                             fontsize=10)
             except np.linalg.LinAlgError:
                 print(f"Не удалось построить KDE для столбца {column}, так как данные имеют низкую дисперсию.")
-                continue
+                peak_x = None
 
             # Легенда
             plt.legend(fontsize=10)
@@ -350,9 +372,12 @@ class EDAProcessor:
                 "Признак": column,
                 "Эксцесс": round(kurt, 2),
                 "Асимметрия": round(skewness, 2),
-                "Пик": round(peak_x, 2) if 'peak_x' in locals() else None,
+                "Пик": round(peak_x, 2) if peak_x else None,
                 "Среднее": round(mean, 2),
                 "Медиана": round(median, 2),
+                "25-й перцентиль": round(percentile_values[0.25], 2),
+                "75-й перцентиль": round(percentile_values[0.75], 2),
+                "99-й перцентиль": round(percentile_values[0.99], 2),
                 "Распределение": range_info,
                 "Вывод": distribution
             })
