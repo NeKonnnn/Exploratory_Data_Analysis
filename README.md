@@ -84,3 +84,29 @@
 eda_summary = eda.generate_eda_summary()
 print(eda_summary['summary'])
 ```
+
+### Визуализация распределения целевой переменной
+```python
+eda.plot_target_distribution(target_column="target")
+```
+
+### Анализ выбросов
+```python
+outliers = eda.detect_outliers_iqr(numeric_columns=["column1", "column2"])
+print(outliers)
+```
+
+### Анализ корреляций
+```python
+correlations = eda.analyze_correlations(target_column="target", threshold=0.5)
+print(correlations['correlations'])
+```
+
+### Сохранение отчетов в Excel
+```python
+summaries = {
+    "EDA Summary": eda_summary['summary'],
+    "Outliers": outliers
+}
+eda.save_all_summaries_to_excel(summaries)
+```
