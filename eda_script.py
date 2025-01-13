@@ -408,7 +408,7 @@ class EDAProcessor:
     def analyze_categorical_cross_tabulations(self, categorical_columns):
         """
         Построить одну таблицу сопряженности для всех категориальных переменных.
-        Автоматически сделать выводы о взаимосвязях.
+        Автоматически сделать выводы о взаимосвязях с учётом данных формата даты.
 
         Параметры:
         categorical_columns (list): Список категориальных колонок.
@@ -421,13 +421,39 @@ class EDAProcessor:
         conclusions = {}
 
         for i, col1 in enumerate(categorical_columns):
+            # Удаляем пропуски
+            col1_data = self.df[col1].dropna()
+
+            # Пропускаем столбцы с датами
+            try:
+                parsed_dates = pd.to_datetime(col1_data, format='%d.%m.%Y', errors='coerce')
+                if parsed_dates.notna().mean() > 0.8:
+                    print(f"Пропущен анализ для столбца {col1}, так как он содержит данные формата даты.")
+                    continue
+            except Exception as e:
+                print(f"Ошибка при проверке формата даты для столбца {col1}: {e}")
+                continue
+
             for col2 in categorical_columns[i + 1:]:
+                # Удаляем пропуски
+                col2_data = self.df[col2].dropna()
+
+                # Пропускаем столбцы с датами
+                try:
+                    parsed_dates = pd.to_datetime(col2_data, format='%d.%m.%Y', errors='coerce')
+                    if parsed_dates.notna().mean() > 0.8:
+                        print(f"Пропущен анализ для столбца {col2}, так как он содержит данные формата даты.")
+                        continue
+                except Exception as e:
+                    print(f"Ошибка при проверке формата даты для столбца {col2}: {e}")
+                    continue
+
                 # Таблица сопряженности
                 ctab = pd.crosstab(self.df[col1], self.df[col2], dropna=True)
-                
+
                 # Добавляем информацию о паре переменных
-                ctab.index = pd.MultiIndex.from_product([[col1], ctab.index], names=["Variable1", "Category1"])
-                ctab.columns = pd.MultiIndex.from_product([[col2], ctab.columns], names=["Variable2", "Category2"])
+                ctab.index = pd.MultiIndex.from_product([[col1], ctab.index], names=["Признак 1", "Категории признака 1"])
+                ctab.columns = pd.MultiIndex.from_product([[col2], ctab.columns], names=["Признак 2", "Категории признака 2"])
                 combined_cross_tab.append(ctab)
 
                 # Анализ связи
@@ -438,8 +464,12 @@ class EDAProcessor:
                     conclusions[f"{col1} vs {col2}"] = "Существуют неоднозначные связи (одна категория соответствует нескольким категориям другой переменной)."
 
         # Объединяем все таблицы в одну
-        combined_cross_tab_df = pd.concat(combined_cross_tab, axis=0)
-        return combined_cross_tab_df, conclusions
+        if combined_cross_tab:
+            combined_cross_tab_df = pd.concat(combined_cross_tab, axis=0)
+            return combined_cross_tab_df, conclusions
+        else:
+            print("Нет подходящих категориальных переменных для анализа.")
+            return pd.DataFrame(), conclusions
 
 
     def find_rare_categories(self, categorical_columns, threshold=0.05):
@@ -454,10 +484,36 @@ class EDAProcessor:
         dict: Словарь с редкими категориями для каждой переменной.
         """
         rare_categories = {}
+
         for col in categorical_columns:
-            value_counts = self.df[col].value_counts(normalize=True)
+            # Удаляем пропуски
+            non_na_data = self.df[col].dropna()
+
+            # Проверяем, если колонка полностью пустая
+            if non_na_data.empty:
+                print(f"Пропущен анализ для столбца {col}, так как он пустой после удаления пропусков.")
+                continue
+
+            # Проверяем, является ли колонка числовой
+            if pd.api.types.is_numeric_dtype(non_na_data):
+                print(f"Пропущен анализ для столбца {col}, так как он содержит числовые данные.")
+                continue
+
+            # Проверяем, является ли колонка датой
+            try:
+                parsed_dates = pd.to_datetime(non_na_data, format='%d.%m.%Y', errors='coerce')
+                if parsed_dates.notna().mean() > 0.8:  # Если более 80% значений интерпретируются как даты
+                    print(f"Пропущен анализ для столбца {col}, так как он содержит данные формата даты.")
+                    continue
+            except Exception as e:
+                print(f"Ошибка при проверке формата даты для столбца {col}: {e}")
+                continue
+
+            # Подсчитываем доли значений и выявляем редкие категории
+            value_counts = non_na_data.value_counts(normalize=True)
             rare_values = value_counts[value_counts < threshold].index.tolist()
             rare_categories[col] = rare_values
+
         return rare_categories
 
     def analyze_correlations(self, target_column=None, threshold=0.5):
