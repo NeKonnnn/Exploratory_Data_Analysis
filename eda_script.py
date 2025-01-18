@@ -6,8 +6,12 @@ import seaborn as sns
 from scipy.stats import zscore
 from scipy.stats import f_oneway
 from scipy.stats import chi2_contingency
-from scipy.stats import kurtosis, skew
+from scipy.stats import kurtosis, skew, norm
 from scipy.stats import gaussian_kde
+from statsmodels.tsa.seasonal import STL
+from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
+from statsmodels.tsa.stattools import adfuller
+from statsmodels.tsa.stattools import acf, pacf
 
 class EDAProcessor:
     def __init__(self, df, output_dir="DATA_OUT/graphics"):
@@ -268,7 +272,6 @@ class EDAProcessor:
         Возвращает:
         pd.DataFrame: Итоговая сводная таблица с аналитикой по признакам.
         """
-        from scipy.stats import kurtosis, skew, norm
 
         summary_data = []
 
@@ -397,7 +400,6 @@ class EDAProcessor:
         Возвращает:
         pd.DataFrame: Сводная таблица с признаками и выбросами.
         """
-        from scipy.stats import zscore
 
         outlier_summary = []
         for column in numeric_columns:
@@ -496,6 +498,31 @@ class EDAProcessor:
             print("Нет подходящих категориальных переменных для анализа.")
             return pd.DataFrame(), conclusions
 
+    def plot_numeric_pairplot(self, numeric_columns=None):
+        """
+        Построить графики парных зависимостей для числовых признаков и сохранить в файл.
+
+        Параметры:
+        numeric_columns (list): Список числовых колонок. Если None, используются все числовые столбцы.
+        """
+        if numeric_columns is None:
+            numeric_columns = self.df.select_dtypes(include=['number']).columns.tolist()
+
+        if not numeric_columns:
+            print("Нет числовых колонок для построения графиков парных зависимостей.")
+            return
+
+        # Построение pairplot
+        pairplot_fig = sns.pairplot(self.df[numeric_columns], diag_kind="kde", corner=True)
+        pairplot_fig.fig.suptitle("Графики парных зависимостей числовых признаков", y=1.02, fontsize=16)
+
+        # Сохранение графика
+        file_path = os.path.join(self.output_dir, "numeric_pairplot.jpg")
+        pairplot_fig.savefig(file_path, bbox_inches='tight')
+        plt.show()
+
+        print(f"Графики парных зависимостей сохранены в: {file_path}")
+
 
     def find_rare_categories(self, categorical_columns, threshold=0.05):
         """
@@ -555,8 +582,6 @@ class EDAProcessor:
             - 'anova': DataFrame с результатами теста ANOVA для категориального таргета.
             - 'cramers_v': DataFrame с Cramer's V для категориального таргета и категориальных признаков.
         """
-        from scipy.stats import f_oneway, chi2_contingency
-        import numpy as np
 
         results = {}
 
@@ -663,6 +688,235 @@ class EDAProcessor:
             raise ValueError("Тип целевой переменной не распознан. Она должна быть числовой или категориальной.")
 
         return results
+
+    def analyze_datetime_attributes(self, datetime_column):
+        """
+        Анализ временных атрибутов записей (день, месяц, час, год) и построение гистограмм.
+
+        Параметры:
+        datetime_column (str): Название столбца с временными метками.
+
+        Возвращает:
+        dict: Словарь с DataFrame для каждого временного атрибута (годы, месяцы, дни, часы).
+        """
+        self.df[datetime_column] = pd.to_datetime(self.df[datetime_column])
+
+        # Извлекаем атрибуты временных меток
+        self.df['Год'] = self.df[datetime_column].dt.year
+        self.df['Месяц'] = self.df[datetime_column].dt.month
+        self.df['День'] = self.df[datetime_column].dt.day
+        self.df['Час'] = self.df[datetime_column].dt.hour
+
+        # Список временных атрибутов
+        attributes = ['Год', 'Месяц', 'День', 'Час']
+        summary_tables = {}
+
+        for attr in attributes:
+            plt.figure(figsize=(10, 6))
+            sns.histplot(self.df[attr], kde=False, bins=30, color='skyblue', edgecolor='black')
+            plt.title(f"Распределение по '{attr}'", fontsize=16)
+            plt.xlabel(attr, fontsize=12)
+            plt.ylabel("Частота", fontsize=12)
+            plt.grid(axis='y', linestyle='--', alpha=0.7)
+
+            # Сохранение графика
+            file_path = os.path.join(self.output_dir, f"datetime_attribute_distribution_{attr}.jpg")
+            plt.savefig(file_path, bbox_inches='tight')
+            plt.show()
+
+            print(f"График распределения по '{attr}' сохранён в: {file_path}")
+
+            # Создаём сводную таблицу
+            summary_table = self.df[attr].value_counts().sort_index().reset_index()
+            summary_table.columns = [attr, 'Частота']
+            summary_tables[attr] = summary_table
+
+        return summary_tables
+
+    def decompose_time_series(self, datetime_column, value_column):
+        """
+        Декомпозиция временного ряда на тренд, сезонность и остатки с выводом статистик.
+
+        Параметры:
+        datetime_column (str): Название столбца с временными метками.
+        value_column (str): Название столбца с временными значениями.
+
+        Возвращает:
+        pd.DataFrame: Сводная таблица с основными статистиками для тренда, сезонности и остатков.
+        """
+        self.df[datetime_column] = pd.to_datetime(self.df[datetime_column])
+        self.df = self.df.sort_values(by=datetime_column)
+        ts = self.df.set_index(datetime_column)[value_column]
+
+        stl = STL(ts, period=12)
+        result = stl.fit()
+
+        # Вывод графика декомпозиции
+        result.plot()
+        plt.suptitle(f"Декомпозиция временного ряда: {value_column}", fontsize=16)
+        file_path = os.path.join(self.output_dir, f"stl_decomposition_{value_column}.jpg")
+        plt.savefig(file_path, bbox_inches='tight')
+        plt.show()
+        plt.close()
+
+        # Расчет статистик
+        components = {
+            "Trend": result.trend,
+            "Seasonal": result.seasonal,
+            "Residual": result.resid
+        }
+        stats = {key: {
+            "Среднее": comp.mean(),
+            "Стандартное отклонение": comp.std(),
+            "Минимум": comp.min(),
+            "Максимум": comp.max()
+        } for key, comp in components.items()}
+
+        return pd.DataFrame(stats).T
+
+    def plot_autocorrelations(self, datetime_column, value_column, lags=50):
+        """
+        Построить графики автокорреляции (ACF) и частичной автокорреляции (PACF)
+        и вернуть таблицу значений.
+
+        Параметры:
+        datetime_column (str): Название столбца с временными метками.
+        value_column (str): Название столбца с временными значениями.
+        lags (int): Количество лагов для анализа.
+
+        Возвращает:
+        pd.DataFrame: Таблица значений ACF и PACF.
+        """
+        self.df[datetime_column] = pd.to_datetime(self.df[datetime_column])
+        self.df = self.df.sort_values(by=datetime_column)
+        ts = self.df.set_index(datetime_column)[value_column]
+
+        # Вычисление автокорреляции и частичной автокорреляции
+        acf_values = acf(ts, nlags=lags, fft=True)
+        pacf_values = pacf(ts, nlags=lags)
+
+        # Построение графиков
+        plt.figure(figsize=(12, 6))
+        plot_acf(ts, lags=lags, title="ACF (Автокорреляция)")
+        plt.savefig(os.path.join(self.output_dir, f"acf_{value_column}.jpg"), bbox_inches='tight')
+        plt.show()
+
+        plt.figure(figsize=(12, 6))
+        plot_pacf(ts, lags=lags, title="PACF (Частичная автокорреляция)")
+        plt.savefig(os.path.join(self.output_dir, f"pacf_{value_column}.jpg"), bbox_inches='tight')
+        plt.show()
+
+        # Создание таблицы с ACF и PACF
+        acf_pacf_table = pd.DataFrame({
+            "Лаг": range(len(acf_values)),
+            "ACF (Автокорреляция)": acf_values,
+            "PACF (Частичная автокорреляция)": pacf_values
+        })
+
+        return acf_pacf_table
+
+    def check_stationarity(self, datetime_column, value_column):
+        """
+        Проверка стационарности временного ряда с использованием теста Дики-Фуллера.
+
+        Параметры:
+        datetime_column (str): Название столбца с временными метками.
+        value_column (str): Название столбца с временными значениями.
+
+        Возвращает:
+        pd.DataFrame: Результаты теста Дики-Фуллера в табличной форме.
+        """
+        self.df[datetime_column] = pd.to_datetime(self.df[datetime_column])
+        self.df = self.df.sort_values(by=datetime_column)
+        ts = self.df.set_index(datetime_column)[value_column]
+
+        result = adfuller(ts.dropna())
+        stats = {
+            "ADF Statistic": result[0],
+            "p-value": result[1],
+            "Critical Value (1%)": result[4]["1%"],
+            "Critical Value (5%)": result[4]["5%"],
+            "Critical Value (10%)": result[4]["10%"],
+            "Stationary": result[1] < 0.05
+        }
+        return pd.DataFrame([stats])
+
+    def plot_seasonality_heatmap(self, datetime_column, value_column, freq='month'):
+        """
+        Построить тепловую карту сезонности и вернуть используемую таблицу.
+
+        Параметры:
+        datetime_column (str): Название столбца с временными метками.
+        value_column (str): Название столбца с временными значениями.
+        freq (str): Частота ("month", "day_of_week", "hour").
+
+        Возвращает:
+        pd.DataFrame: Таблица, используемая для построения тепловой карты.
+        """
+        self.df[datetime_column] = pd.to_datetime(self.df[datetime_column])
+        self.df['Year'] = self.df[datetime_column].dt.year
+
+        if freq == 'month':
+            self.df['Month'] = self.df[datetime_column].dt.month
+            pivot = self.df.pivot_table(index='Year', columns='Month', values=value_column, aggfunc='mean')
+            ylabel, xlabel = "Год", "Месяц"
+        elif freq == 'day_of_week':
+            self.df['DayOfWeek'] = self.df[datetime_column].dt.dayofweek
+            pivot = self.df.pivot_table(index='Year', columns='DayOfWeek', values=value_column, aggfunc='mean')
+            ylabel, xlabel = "Год", "День недели"
+        elif freq == 'hour':
+            self.df['Hour'] = self.df[datetime_column].dt.hour
+            pivot = self.df.pivot_table(index='Year', columns='Hour', values=value_column, aggfunc='mean')
+            ylabel, xlabel = "Год", "Час"
+        else:
+            raise ValueError("Неверное значение freq. Используйте 'month', 'day_of_week' или 'hour'.")
+
+        plt.figure(figsize=(12, 8))
+        sns.heatmap(pivot, cmap='viridis', annot=True, fmt=".1f", linewidths=0.5)
+        plt.title(f"Тепловая карта сезонности: {value_column}", fontsize=14)
+        plt.xlabel(xlabel, fontsize=12)
+        plt.ylabel(ylabel, fontsize=12)
+        file_path = os.path.join(self.output_dir, f"seasonality_heatmap_{value_column}.jpg")
+        plt.savefig(file_path, bbox_inches='tight')
+        plt.show()
+
+        return pivot
+
+    def plot_time_series_with_table(self, datetime_column, value_column):
+        """
+        Построить график временного ряда и вернуть таблицу данных в формате pandas DataFrame.
+
+        Параметры:
+        datetime_column (str): Название столбца с временными метками.
+        value_column (str): Название столбца с временными значениями.
+
+        Возвращает:
+        pd.DataFrame: Таблица данных, использованная для отображения.
+        """
+        # Убедимся, что столбец с датами имеет правильный формат
+        self.df[datetime_column] = pd.to_datetime(self.df[datetime_column])
+        self.df = self.df.sort_values(by=datetime_column)
+
+        # Подготовка данных для таблицы (все строки)
+        table_data = self.df[[datetime_column, value_column]].reset_index(drop=True)
+
+        # Построение графика
+        plt.figure(figsize=(12, 6))
+        plt.plot(self.df[datetime_column], self.df[value_column], marker="o", linestyle="-", color="blue")
+        plt.title(f"Временные ряды: {value_column}", fontsize=16)
+        plt.xlabel("Дата", fontsize=12)
+        plt.ylabel("Значение", fontsize=12)
+        plt.grid(True)
+
+        # Сохранение графика
+        file_path = os.path.join(self.output_dir, f"time_series_{value_column}.jpg")
+        plt.savefig(file_path, bbox_inches="tight")
+        plt.show()
+
+        print(f"График временного ряда сохранён в: {file_path}")
+
+        # Возвращаем таблицу данных
+        return table_data
 
     def save_all_summaries_to_excel(self, summaries):
         """
