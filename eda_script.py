@@ -752,8 +752,14 @@ class EDAProcessor:
         result = stl.fit()
 
         # Вывод графика декомпозиции
-        result.plot()
+        fig = result.plot()
+        fig.set_size_inches(10, 8)  # Увеличиваем размер графика
         plt.suptitle(f"Декомпозиция временного ряда: {value_column}", fontsize=16)
+
+        # Убираем наезд надписей на оси X
+        for ax in fig.axes:
+            ax.tick_params(axis="x", rotation=45)  # Поворачиваем метки оси X
+
         file_path = os.path.join(self.output_dir, f"stl_decomposition_{value_column}.jpg")
         plt.savefig(file_path, bbox_inches='tight')
         plt.show()
@@ -773,6 +779,7 @@ class EDAProcessor:
         } for key, comp in components.items()}
 
         return pd.DataFrame(stats).T
+
 
     def plot_autocorrelations(self, datetime_column, value_column, lags=50):
         """
