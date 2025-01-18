@@ -691,7 +691,8 @@ class EDAProcessor:
 
     def analyze_datetime_attributes(self, datetime_column):
         """
-        Анализ временных атрибутов записей (день, месяц, час, год) и построение гистограмм.
+        Анализ временных атрибутов записей (день, месяц, час, год) с построением гистограмм,
+        KDE и наложением нормального распределения.
 
         Параметры:
         datetime_column (str): Название столбца с временными метками.
@@ -712,12 +713,56 @@ class EDAProcessor:
         summary_tables = {}
 
         for attr in attributes:
+            data = self.df[attr].dropna()
+
+            if data.nunique() <= 1:  # Если значения одинаковы
+                print(f"Пропущен график для '{attr}', так как значения одинаковы или отсутствует дисперсия.")
+                continue
+
             plt.figure(figsize=(10, 6))
-            sns.histplot(self.df[attr], kde=False, bins=30, color='skyblue', edgecolor='black')
+
+            # Гистограмма с KDE
+            sns.histplot(
+                data, 
+                kde=True, 
+                bins=30, 
+                color='skyblue', 
+                edgecolor='black', 
+                alpha=0.8, 
+                line_kws={"color": "orange", "linewidth": 2}, 
+                label="KDE (плотность)"
+            )
+
+            # Вычисляем параметры нормального распределения
+            mean = data.mean()
+            std_dev = data.std()
+            x_range = np.linspace(data.min(), data.max(), 1000)
+            ideal_pdf = norm.pdf(x_range, loc=mean, scale=std_dev)
+            ideal_pdf_scaled = ideal_pdf * len(data) * (data.max() - data.min()) / 30
+
+            # Добавляем кривую нормального распределения
+            plt.plot(
+                x_range, 
+                ideal_pdf_scaled, 
+                color="red", 
+                linestyle="--", 
+                linewidth=2.5, 
+                label="Идеальное распределение"
+            )
+
+            # Медиана и среднее
+            median = data.median()
+            plt.axvline(median, color="blue", linestyle="--", linewidth=2, label=f"Медиана: {median:.2f}")
+            plt.axvline(mean, color="green", linestyle="-.", linewidth=2, label=f"Среднее: {mean:.2f}")
+
+            # Добавление информации на график
             plt.title(f"Распределение по '{attr}'", fontsize=16)
             plt.xlabel(attr, fontsize=12)
             plt.ylabel("Частота", fontsize=12)
             plt.grid(axis='y', linestyle='--', alpha=0.7)
+
+            # Легенда
+            plt.legend(fontsize=10)
 
             # Сохранение графика
             file_path = os.path.join(self.output_dir, f"datetime_attribute_distribution_{attr}.jpg")
@@ -726,8 +771,8 @@ class EDAProcessor:
 
             print(f"График распределения по '{attr}' сохранён в: {file_path}")
 
-            # Создаём сводную таблицу
-            summary_table = self.df[attr].value_counts().sort_index().reset_index()
+            # Сводная таблица частот
+            summary_table = data.value_counts().sort_index().reset_index()
             summary_table.columns = [attr, 'Частота']
             summary_tables[attr] = summary_table
 
