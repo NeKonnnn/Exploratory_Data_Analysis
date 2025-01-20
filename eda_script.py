@@ -12,6 +12,9 @@ from statsmodels.tsa.seasonal import STL
 from statsmodels.graphics.tsaplots import plot_acf, plot_pacf
 from statsmodels.tsa.stattools import adfuller
 from statsmodels.tsa.stattools import acf, pacf
+from phik.report import plot_correlation_matrix
+from phik import phik_matrix
+from phik.binning import bin_data
 
 class EDAProcessor:
     def __init__(self, df, output_dir="DATA_OUT/graphics"):
@@ -216,54 +219,9 @@ class EDAProcessor:
             plt.show()
             plt.close()
 
-    def detect_outliers_iqr(self, numeric_columns):
-        """
-        Построить графики "Ящик с усами" для числовых переменных и сохранить их в файлы, а также определить выбросы.
-
-        Параметры:
-        numeric_columns (list): Список числовых колонок.
-
-        Возвращает:
-        pd.DataFrame: Сводная таблица с признаками и выбросами.
-        """
-        outlier_summary = []
-
-        for column in numeric_columns:
-            # Вычисляем квартильные значения
-            Q1 = self.df[column].quantile(0.25)
-            Q3 = self.df[column].quantile(0.75)
-            IQR = Q3 - Q1
-
-            # Определяем границы выбросов
-            lower_bound = Q1 - 1.5 * IQR
-            upper_bound = Q3 + 1.5 * IQR
-
-            # Находим выбросы
-            outliers = self.df[(self.df[column] < lower_bound) | (self.df[column] > upper_bound)][column].tolist()
-
-            # Добавляем данные о выбросах в сводную таблицу
-            outlier_summary.append({
-                'Признак': column,
-                'Выбросы': outliers
-            })
-
-            # Построение графика
-            plt.figure(figsize=(8, 4))
-            sns.boxplot(x=self.df[column], palette="viridis")
-            plt.title(f"Ящик с усами: {column}")
-            plt.xlabel(column)
-            file_path = os.path.join(self.output_dir, f"boxplot_{column}.jpg")
-            plt.savefig(file_path, bbox_inches='tight')
-            plt.show()
-            plt.close()
-
-        # Создаем сводную таблицу
-        outlier_summary_df = pd.DataFrame(outlier_summary)
-        return outlier_summary_df
-
     def plot_kde_distributions(self, numeric_columns):
         """
-        Построить гистограммы и графики KDE для всех числовых переменных с улучшенным оформлением и аналитикой,
+        Построить гистограммы и графики KDE для всех числовых переменных и аналитикой,
         включая идеальное нормальное распределение.
 
         Параметры:
@@ -388,6 +346,51 @@ class EDAProcessor:
         # Создаем итоговую таблицу
         summary_df = pd.DataFrame(summary_data)
         return summary_df
+
+    def detect_outliers_iqr(self, numeric_columns):
+        """
+        Функция для построения графика "Ящик с усами" для числовых переменных и сохранения их в файлы, а также определения выбросов.
+
+        Параметры:
+        numeric_columns (list): Список числовых колонок.
+
+        Возвращает:
+        pd.DataFrame: Сводная таблица с признаками и выбросами.
+        """
+        outlier_summary = []
+
+        for column in numeric_columns:
+            # Вычисляем квартильные значения
+            Q1 = self.df[column].quantile(0.25)
+            Q3 = self.df[column].quantile(0.75)
+            IQR = Q3 - Q1
+
+            # Определяем границы выбросов
+            lower_bound = Q1 - 1.5 * IQR
+            upper_bound = Q3 + 1.5 * IQR
+
+            # Находим выбросы
+            outliers = self.df[(self.df[column] < lower_bound) | (self.df[column] > upper_bound)][column].tolist()
+
+            # Добавляем данные о выбросах в сводную таблицу
+            outlier_summary.append({
+                'Признак': column,
+                'Выбросы': outliers
+            })
+
+            # Построение графика
+            plt.figure(figsize=(8, 4))
+            sns.boxplot(x=self.df[column], palette="viridis")
+            plt.title(f"Ящик с усами: {column}")
+            plt.xlabel(column)
+            file_path = os.path.join(self.output_dir, f"boxplot_{column}.jpg")
+            plt.savefig(file_path, bbox_inches='tight')
+            plt.show()
+            plt.close()
+
+        # Создаем сводную таблицу
+        outlier_summary_df = pd.DataFrame(outlier_summary)
+        return outlier_summary_df
 
     def detect_outliers_zscore(self, numeric_columns, threshold=3):
         """
@@ -523,7 +526,6 @@ class EDAProcessor:
 
         print(f"Графики парных зависимостей сохранены в: {file_path}")
 
-
     def find_rare_categories(self, categorical_columns, threshold=0.05):
         """
         Выявить редкие категории в категориальных переменных.
@@ -583,45 +585,63 @@ class EDAProcessor:
             - 'cramers_v': DataFrame с Cramer's V для категориального таргета и категориальных признаков.
         """
 
+        import numpy as np
+        from scipy.stats import f_oneway, chi2_contingency
+        import pandas as pd
+
         results = {}
 
-        # Проверка на наличие целевой переменной
+        # Предварительная проверка: наличие целевой переменной
         if target_column is None or target_column not in self.df.columns:
             raise ValueError("Укажите корректное название целевой переменной.")
+
+        # Убираем пропуски и очищаем данные
+        self.df = self.df.dropna()
 
         # Разделение признаков по типам
         numeric_columns = self.df.select_dtypes(include=['number']).columns.tolist()
         categorical_columns = self.df.select_dtypes(include=['object', 'category']).columns.tolist()
 
-        # Убираем пропуски
-        cleaned_df = self.df.dropna()
+        if target_column not in numeric_columns + categorical_columns:
+            raise ValueError("Целевая переменная должна быть числовой или категориальной.")
+
+        # Функция для определения уровня связи по шкале Чеддока
+        def cheddock_scale(value):
+            if value < 0.1:
+                return "Очень слабая связь"
+            elif 0.1 <= value < 0.3:
+                return "Слабая связь"
+            elif 0.3 <= value < 0.5:
+                return "Умеренная связь"
+            elif 0.5 <= value < 0.7:
+                return "Заметная связь"
+            elif 0.7 <= value < 0.9:
+                return "Высокая связь"
+            elif 0.9 <= value < 1.0:
+                return "Весьма высокая связь"
+            else:
+                return "Идеальная связь"
+
+        # Функция для интерпретации Cramér's V для категориальных данных
+        def cramers_v_scale(value):
+            if value <= 0.2:
+                return "Слабая связь"
+            elif 0.2 < value <= 0.6:
+                return "Умеренная связь"
+            elif value > 0.6:
+                return "Сильная связь"
+            else:
+                return "Нет связи"
 
         # 1. Корреляция для числовых признаков
         if target_column in numeric_columns:
-            pearson_corr = cleaned_df.corr(method='pearson')
-            spearman_corr = cleaned_df.corr(method='spearman')
-            kendall_corr = cleaned_df.corr(method='kendall')
+            pearson_corr = self.df[numeric_columns].corr(method='pearson')
+            spearman_corr = self.df[numeric_columns].corr(method='spearman')
+            kendall_corr = self.df[numeric_columns].corr(method='kendall')
 
             # Список для хранения пар с высокой корреляцией
             correlated_pairs = []
             processed_pairs = set()
-
-            # Функция для определения уровня связи по шкале Чеддока
-            def cheddock_scale(value):
-                if value < 0.1:
-                    return "Очень слабая связь"
-                elif 0.1 <= value < 0.3:
-                    return "Слабая связь"
-                elif 0.3 <= value < 0.5:
-                    return "Умеренная связь"
-                elif 0.5 <= value < 0.7:
-                    return "Заметная связь"
-                elif 0.7 <= value < 0.9:
-                    return "Высокая связь"
-                elif 0.9 <= value < 1.0:
-                    return "Весьма высокая связь"
-                else:
-                    return "Идеальная связь"
 
             for col1 in numeric_columns:
                 for col2 in numeric_columns:
@@ -630,6 +650,22 @@ class EDAProcessor:
                         spearman_value = abs(spearman_corr.loc[col1, col2])
                         kendall_value = abs(kendall_corr.loc[col1, col2])
 
+                        # Рассчёт Cramér's V и Phi (только для бинарных данных)
+                        contingency_table = pd.crosstab(self.df[col1].round(), self.df[col2].round())
+                        chi2, _, _, _ = chi2_contingency(contingency_table)
+                        n = contingency_table.sum().sum()
+                        rows, cols = contingency_table.shape
+
+                        # Phi-коэффициент только для 2x2 таблиц
+                        if rows == 2 and cols == 2:
+                            phi_coefficient = np.sqrt(chi2 / n) if n > 0 else 0
+                        else:
+                            phi_coefficient = None
+
+                        # Рассчёт Cramér's V для любых таблиц
+                        min_dim = min(rows - 1, cols - 1)
+                        cramers_v = np.sqrt(chi2 / (n * min_dim)) if min_dim > 0 else None
+
                         if (pearson_value >= threshold or
                             spearman_value >= threshold or
                             kendall_value >= threshold):
@@ -637,10 +673,14 @@ class EDAProcessor:
                             correlated_pairs.append({
                                 "Признак 1": col1,
                                 "Признак 2": col2,
-                                "Корреляция Пирсона": round(pearson_value * 100, 2),
+                                "Корреляция Пирсона": round(pearson_value, 2),
                                 "Вывод по шкале Чеддока (Пирсон)": cheddock_scale(pearson_value),
-                                "Корреляция Спирмена": round(spearman_value * 100, 2),
-                                "Корреляция Кендала": round(kendall_value * 100, 2)
+                                "Корреляция Спирмена": round(spearman_value, 2),
+                                "Вывод по шкале Чеддока (Спирмен)": cheddock_scale(spearman_value),
+                                "Корреляция Кендала": round(kendall_value, 2),
+                                "Вывод по шкале Чеддока (Кендалл)": cheddock_scale(kendall_value),
+                                "Phi-коэффициент": round(phi_coefficient, 2) if phi_coefficient is not None else None,
+                                "Cramer's V": round(cramers_v, 2) if cramers_v is not None else None
                             })
                             processed_pairs.add((col1, col2))
 
@@ -653,9 +693,9 @@ class EDAProcessor:
             anova_results = []
 
             for col in numeric_columns:
-                unique_groups = cleaned_df[target_column].dropna().unique()
+                unique_groups = self.df[target_column].dropna().unique()
                 if len(unique_groups) > 1:  # Проверка на достаточное количество групп
-                    groups = [cleaned_df[col][cleaned_df[target_column] == group] for group in unique_groups]
+                    groups = [self.df[col][self.df[target_column] == group] for group in unique_groups]
 
                     # ANOVA тест
                     f_stat, p_value = f_oneway(*groups)
@@ -667,27 +707,80 @@ class EDAProcessor:
 
             results['anova'] = pd.DataFrame(anova_results)
 
-            # 3. Критерий Крамера V для категориальных признаков
+            # 3. Cramér's V для категориальных признаков
             cramers_v_results = []
 
             for col in categorical_columns:
                 if col != target_column:
-                    contingency_table = pd.crosstab(cleaned_df[col], cleaned_df[target_column])
-                    chi2, p, dof, expected = chi2_contingency(contingency_table)
+                    contingency_table = pd.crosstab(self.df[col], self.df[target_column])
+                    chi2, _, _, _ = chi2_contingency(contingency_table)
                     n = contingency_table.sum().sum()
-                    cramers_v = np.sqrt(chi2 / (n * (min(contingency_table.shape) - 1)))
+                    rows, cols = contingency_table.shape
+                    min_dim = min(rows - 1, cols - 1)
 
+                    cramers_v = np.sqrt(chi2 / (n * min_dim)) if min_dim > 0 else None
                     cramers_v_results.append({
                         "Признак": col,
-                        "Cramer\'s V": round(cramers_v, 2)
+                        "Cramer's V": round(cramers_v, 2) if cramers_v is not None else None,
+                        "Интерпретация (Cramer's V)": cramers_v_scale(cramers_v) if cramers_v is not None else "Нет связи"
                     })
 
             results['cramers_v'] = pd.DataFrame(cramers_v_results)
 
-        else:
-            raise ValueError("Тип целевой переменной не распознан. Она должна быть числовой или категориальной.")
-
         return results
+
+    def analyze_phik_correlations(self, threshold=0.5):
+        """
+        Анализ Phik корреляций между всеми признаками.
+
+        Параметры:
+        threshold (float): Порог для включения коррелирующих пар (по модулю).
+
+        Возвращает:
+        pd.DataFrame: Таблица с парами признаков, их Phik корреляцией и выводами.
+        """
+
+        # Убираем пропуски и очищаем данные
+        self.df = self.df.dropna()
+
+        # Вычисляем Phik корреляции
+        phik_corr = self.df.phik_matrix(interval_cols=None)
+
+        # Функция для интерпретации Phik-коэффициента
+        def interpret_phik(value):
+            if value <= 0.2:
+                return "Слабая связь"
+            elif 0.2 < value <= 0.4:
+                return "Умеренная связь"
+            elif 0.4 < value <= 0.6:
+                return "Заметная связь"
+            elif 0.6 < value <= 0.8:
+                return "Высокая связь"
+            else:
+                return "Очень высокая связь"
+
+        # Список для хранения пар с высокой корреляцией
+        correlated_pairs = []
+        processed_pairs = set()
+
+        for col1 in phik_corr.columns:
+            for col2 in phik_corr.index:
+                if col1 != col2 and (col1, col2) not in processed_pairs and (col2, col1) not in processed_pairs:
+                    phik_value = abs(phik_corr.loc[col1, col2])
+
+                    if phik_value >= threshold:
+                        correlated_pairs.append({
+                            "Признак 1": col1,
+                            "Признак 2": col2,
+                            "Phik-коэффициент": round(phik_value, 2),
+                            "Вывод": interpret_phik(phik_value)
+                        })
+                        processed_pairs.add((col1, col2))
+
+        # Создаем DataFrame с результатами
+        phik_correlations_df = pd.DataFrame(correlated_pairs).drop_duplicates(subset=["Признак 1", "Признак 2"])
+
+        return phik_correlations_df
 
     def analyze_datetime_attributes(self, datetime_column):
         """
