@@ -16,6 +16,21 @@ from phik.report import plot_correlation_matrix
 from phik import phik_matrix
 from phik.binning import bin_data
 
+import time
+
+def timing(func):
+    """
+    Декоратор для измерения времени выполнения функций.
+    """
+    def wrapper(*args, **kwargs):
+        start_time = time.time()
+        result = func(*args, **kwargs)
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        print(f"Функция '{func.__name__}' выполнена за {elapsed_time:.2f} секунд.")
+        return result
+    return wrapper
+
 class EDAProcessor:
     def __init__(self, df, output_dir="DATA_OUT/graphics"):
         """
@@ -30,6 +45,7 @@ class EDAProcessor:
         os.makedirs(self.output_dir, exist_ok=True)
         os.makedirs("DATA_OUT", exist_ok=True)
 
+    @timing
     def generate_eda_summary(self):
         """
         Сформировать сводную таблицу для разведочного анализа данных.
@@ -76,7 +92,7 @@ class EDAProcessor:
             'duplicate_columns': duplicate_columns
         }
 
-
+    @timing
     def plot_target_distribution(self, target_column):
         """
         Построить график распределения бинарной целевой переменной и сохранить его в файл.
@@ -104,6 +120,7 @@ class EDAProcessor:
         })
         return target_summary
 
+    @timing
     def plot_categorical_distributions(self, categorical_columns):
         """
         Построить графики распределения для всех категориальных переменных и сохранить их в файлы.
@@ -137,16 +154,28 @@ class EDAProcessor:
                 print(f"Пропущен график для столбца {column}, так как он содержит числовые данные.")
                 continue
 
+            # Количество уникальных значений
+            unique_count = non_na_data.nunique()
+
+            # Автоматический подбор размеров графика
+            width = min(max(8, unique_count * 0.5), 20)  # Масштабируем ширину графика
+            rotation = 0 if unique_count <= 5 else 30 if unique_count <= 10 else 60  # Автоматический угол поворота подписей
+            height = 6  # Фиксированная высота
+
             # Строим график
-            plt.figure(figsize=(8, 4))
+            plt.figure(figsize=(width, height))
             ax = sns.countplot(x=non_na_data.astype(str), palette="viridis")
             plt.title(f"Распределение категориальной переменной: {column}")
             plt.xlabel(column)
             plt.ylabel("Количество")
-            plt.xticks(rotation=45)
+            plt.xticks(rotation=rotation)
+
+            # Аннотации
             for p in ax.patches:
                 height = p.get_height()
                 ax.annotate(f'{int(height)}', (p.get_x() + p.get_width() / 2., height), ha='center', va='bottom')
+
+            # Сохранение графика
             file_path = os.path.join(self.output_dir, f"categorical_distribution_{column}.jpg")
             plt.savefig(file_path, bbox_inches='tight')
             plt.show()
@@ -167,19 +196,25 @@ class EDAProcessor:
             print("Нет подходящих категориальных переменных для анализа.")
             return pd.DataFrame()
 
+    @timing
     def plot_categorical_vs_target(self, target_column, categorical_columns):
         """
-        Построить графики сравнения категориальных переменных и целевой переменной и сохранить их в файлы.
+        Построить графики сравнения категориальных переменных и целевой переменной,
+        сохранить их в файлы и вернуть сводную таблицу распределения.
 
         Параметры:
         target_column (str): Название колонки с целевой переменной.
         categorical_columns (list): Список категориальных колонок.
+
+        Возвращает:
+        pd.DataFrame: Сводная таблица распределения категориальных признаков по значениям целевой переменной.
         """
+        summary_data = []
+
         for column in categorical_columns:
             # Удаляем пропуски в текущем столбце и целевой переменной
             non_na_data = self.df[[column, target_column]].dropna()
 
-            # Если после удаления пропусков данных нет, пропускаем
             if non_na_data.empty:
                 print(f"Пропущен график для столбца {column}, так как он пустой после удаления пропусков.")
                 continue
@@ -187,7 +222,7 @@ class EDAProcessor:
             # Проверяем формат данных: даты
             try:
                 parsed_dates = pd.to_datetime(non_na_data[column], format='%d.%m.%Y', errors='coerce')
-                if parsed_dates.notna().mean() > 0.8:  # Если более 80% значений интерпретируются как даты
+                if parsed_dates.notna().mean() > 0.8:
                     print(f"Пропущен график для столбца {column}, так как он содержит данные формата даты.")
                     continue
             except Exception as e:
@@ -199,8 +234,16 @@ class EDAProcessor:
                 print(f"Пропущен график для столбца {column}, так как он содержит числовые данные.")
                 continue
 
+            # Количество уникальных значений
+            unique_count = non_na_data[column].nunique()
+            
+            # Автоматический подбор размеров графика
+            width = min(max(8, unique_count * 0.5), 20)  # Масштабируем ширину графика
+            rotation = 0 if unique_count <= 5 else 30 if unique_count <= 10 else 60  # Автоматический угол поворота подписей
+            height = 6  # Фиксированная высота
+
             # Строим график
-            plt.figure(figsize=(8, 4))
+            plt.figure(figsize=(width, height))
             ax = sns.countplot(
                 x=non_na_data[column].astype(str),
                 hue=non_na_data[target_column].astype(str),
@@ -209,16 +252,34 @@ class EDAProcessor:
             plt.title(f"Распределение {column} в зависимости от {target_column}")
             plt.xlabel(column)
             plt.ylabel("Количество")
-            plt.xticks(rotation=45)
+            plt.xticks(rotation=rotation)
             plt.legend(title=target_column)
+
+            # Аннотации
             for p in ax.patches:
                 height = p.get_height()
                 ax.annotate(f'{int(height)}', (p.get_x() + p.get_width() / 2., height), ha='center', va='bottom')
+
+            # Сохранение графика
             file_path = os.path.join(self.output_dir, f"categorical_vs_target_{column}.jpg")
             plt.savefig(file_path, bbox_inches='tight')
             plt.show()
             plt.close()
 
+            # Создаем сводную таблицу распределения
+            category_distribution = non_na_data.groupby([column, target_column]).size().reset_index(name='Количество')
+            category_distribution.insert(0, 'Признак', column)
+            summary_data.append(category_distribution)
+
+        # Объединяем все данные в один DataFrame
+        if summary_data:
+            summary_df = pd.concat(summary_data, ignore_index=True)
+            return summary_df
+        else:
+            print("Нет подходящих категориальных переменных для анализа.")
+            return pd.DataFrame()
+
+    @timing
     def plot_kde_distributions(self, numeric_columns):
         """
         Построить гистограммы и графики KDE для всех числовых переменных и аналитикой,
@@ -248,9 +309,9 @@ class EDAProcessor:
                 kde=True,
                 bins=30,
                 edgecolor="black",
-                color="royalblue",  # Основной цвет столбиков
-                alpha=0.8,          # Прозрачность столбиков
-                linewidth=1.2       # Толщина линии на краях столбиков
+                color="royalblue",
+                alpha=0.8,
+                linewidth=1.2
             )
 
             # Изменение цвета KDE линии
@@ -285,7 +346,7 @@ class EDAProcessor:
             except Exception as e:
                 print(f"Ошибка при построении идеального распределения для столбца {column}: {e}")
 
-            # Попробуем вычислить пиковое значение KDE
+            # Вычисляем пиковое значение KDE
             try:
                 kde = gaussian_kde(data)
                 kde_values = kde(x_range)
@@ -343,10 +404,10 @@ class EDAProcessor:
                 "Вывод": distribution
             })
 
-        # Создаем итоговую таблицу
         summary_df = pd.DataFrame(summary_data)
         return summary_df
 
+    @timing
     def detect_outliers_iqr(self, numeric_columns):
         """
         Функция для построения графика "Ящик с усами" для числовых переменных и сохранения их в файлы, а также определения выбросов.
@@ -392,6 +453,7 @@ class EDAProcessor:
         outlier_summary_df = pd.DataFrame(outlier_summary)
         return outlier_summary_df
 
+    @timing
     def detect_outliers_zscore(self, numeric_columns, threshold=3):
         """
         Найти выбросы на основе Z-score для числовых переменных.
@@ -435,6 +497,7 @@ class EDAProcessor:
         outlier_summary_df = pd.DataFrame(outlier_summary)
         return outlier_summary_df
 
+    @timing
     def analyze_categorical_cross_tabulations(self, categorical_columns):
         """
         Построить одну таблицу сопряженности для всех категориальных переменных.
@@ -501,6 +564,7 @@ class EDAProcessor:
             print("Нет подходящих категориальных переменных для анализа.")
             return pd.DataFrame(), conclusions
 
+    @timing
     def plot_numeric_pairplot(self, numeric_columns=None):
         """
         Построить графики парных зависимостей для числовых признаков и сохранить в файл.
@@ -526,6 +590,7 @@ class EDAProcessor:
 
         print(f"Графики парных зависимостей сохранены в: {file_path}")
 
+    @timing
     def find_rare_categories(self, categorical_columns, threshold=0.05):
         """
         Выявить редкие категории в категориальных переменных.
@@ -570,6 +635,7 @@ class EDAProcessor:
 
         return rare_categories
 
+    @timing
     def analyze_correlations(self, target_column=None, threshold=0.5):
         """
         Анализ корреляций между числовыми признаками и целевой переменной.
@@ -584,10 +650,6 @@ class EDAProcessor:
             - 'anova': DataFrame с результатами теста ANOVA для категориального таргета.
             - 'cramers_v': DataFrame с Cramer's V для категориального таргета и категориальных признаков.
         """
-
-        import numpy as np
-        from scipy.stats import f_oneway, chi2_contingency
-        import pandas as pd
 
         results = {}
 
@@ -729,6 +791,7 @@ class EDAProcessor:
 
         return results
 
+    @timing
     def analyze_phik_correlations(self, threshold=0.5):
         """
         Анализ Phik корреляций между всеми признаками.
@@ -782,6 +845,7 @@ class EDAProcessor:
 
         return phik_correlations_df
 
+    @timing
     def analyze_datetime_attributes(self, datetime_column):
         """
         Анализ временных атрибутов записей (день, месяц, час, год) с построением гистограмм,
@@ -808,7 +872,7 @@ class EDAProcessor:
         for attr in attributes:
             data = self.df[attr].dropna()
 
-            if data.nunique() <= 1:  # Если значения одинаковы
+            if data.nunique() <= 1:
                 print(f"Пропущен график для '{attr}', так как значения одинаковы или отсутствует дисперсия.")
                 continue
 
@@ -819,7 +883,7 @@ class EDAProcessor:
                 data, 
                 kde=True, 
                 bins=30, 
-                color='skyblue', 
+                color='royalblue', 
                 edgecolor='black', 
                 alpha=0.8, 
                 line_kws={"color": "orange", "linewidth": 2}, 
@@ -871,6 +935,7 @@ class EDAProcessor:
 
         return summary_tables
 
+    @timing
     def decompose_time_series(self, datetime_column, value_column):
         """
         Декомпозиция временного ряда на тренд, сезонность и остатки с выводом статистик.
@@ -891,12 +956,11 @@ class EDAProcessor:
 
         # Вывод графика декомпозиции
         fig = result.plot()
-        fig.set_size_inches(10, 8)  # Увеличиваем размер графика
+        fig.set_size_inches(10, 8)
         plt.suptitle(f"Декомпозиция временного ряда: {value_column}", fontsize=16)
 
-        # Убираем наезд надписей на оси X
         for ax in fig.axes:
-            ax.tick_params(axis="x", rotation=45)  # Поворачиваем метки оси X
+            ax.tick_params(axis="x", rotation=45)
 
         file_path = os.path.join(self.output_dir, f"stl_decomposition_{value_column}.jpg")
         plt.savefig(file_path, bbox_inches='tight')
@@ -918,7 +982,7 @@ class EDAProcessor:
 
         return pd.DataFrame(stats).T
 
-
+    @timing
     def plot_autocorrelations(self, datetime_column, value_column, lags=50):
         """
         Построить графики автокорреляции (ACF) и частичной автокорреляции (PACF)
@@ -960,6 +1024,7 @@ class EDAProcessor:
 
         return acf_pacf_table
 
+    @timing
     def check_stationarity(self, datetime_column, value_column):
         """
         Проверка стационарности временного ряда с использованием теста Дики-Фуллера.
@@ -986,6 +1051,7 @@ class EDAProcessor:
         }
         return pd.DataFrame([stats])
 
+    @timing
     def plot_seasonality_heatmap(self, datetime_column, value_column, freq='month'):
         """
         Построить тепловую карту сезонности и вернуть используемую таблицу.
@@ -1027,6 +1093,7 @@ class EDAProcessor:
 
         return pivot
 
+    @timing
     def plot_time_series_with_table(self, datetime_column, value_column):
         """
         Построить график временного ряда и вернуть таблицу данных в формате pandas DataFrame.
@@ -1038,7 +1105,6 @@ class EDAProcessor:
         Возвращает:
         pd.DataFrame: Таблица данных, использованная для отображения.
         """
-        # Убедимся, что столбец с датами имеет правильный формат
         self.df[datetime_column] = pd.to_datetime(self.df[datetime_column])
         self.df = self.df.sort_values(by=datetime_column)
 
@@ -1063,6 +1129,7 @@ class EDAProcessor:
         # Возвращаем таблицу данных
         return table_data
 
+    @timing
     def save_all_summaries_to_excel(self, summaries):
         """
         Сохранить все сводные таблицы в один Excel файл, где каждая таблица находится на отдельном листе.
