@@ -636,37 +636,42 @@ class EDAProcessor:
         return rare_categories
 
     @timing
-    def analyze_correlations(self, target_column=None, threshold=0.5):
+    def analyze_correlations(self, target_column=None, threshold=0.5, correlation_types=None, include_phi=False, include_cramers_v=False):
         """
         Анализ корреляций между числовыми признаками и целевой переменной.
-
         Параметры:
         target_column (str): Название столбца с целевой переменной (может быть числовой или категориальной).
         threshold (float): Порог для включения коррелирующих пар (по модулю).
-
+        correlation_types (list): Список типов корреляций для анализа. Доступные значения: 
+                                'pearson', 'spearman', 'kendall'. По умолчанию все три.
+        include_phi (bool): Включить расчет Phi-коэффициента для бинарных данных.
+        include_cramers_v (bool): Включить расчет Cramér's V для категориальных данных.
         Возвращает:
         dict: Словарь с результатами анализа:
             - 'correlations': DataFrame с корреляциями между числовыми признаками.
             - 'anova': DataFrame с результатами теста ANOVA для категориального таргета.
             - 'cramers_v': DataFrame с Cramer's V для категориального таргета и категориальных признаков.
         """
-
         results = {}
-
+        
+        # Если пользователь не указал типы корреляций, используем все три по умолчанию
+        if correlation_types is None:
+            correlation_types = ['pearson', 'spearman', 'kendall']
+        
         # Предварительная проверка: наличие целевой переменной
         if target_column is None or target_column not in self.df.columns:
             raise ValueError("Укажите корректное название целевой переменной.")
-
+        
         # Убираем пропуски и очищаем данные
         self.df = self.df.dropna()
-
+        
         # Разделение признаков по типам
         numeric_columns = self.df.select_dtypes(include=['number']).columns.tolist()
         categorical_columns = self.df.select_dtypes(include=['object', 'category']).columns.tolist()
-
+        
         if target_column not in numeric_columns + categorical_columns:
             raise ValueError("Целевая переменная должна быть числовой или категориальной.")
-
+        
         # Функция для определения уровня связи по шкале Чеддока
         def cheddock_scale(value):
             if value < 0.1:
@@ -683,7 +688,7 @@ class EDAProcessor:
                 return "Весьма высокая связь"
             else:
                 return "Идеальная связь"
-
+        
         # Функция для интерпретации Cramér's V для категориальных данных
         def cramers_v_scale(value):
             if value <= 0.2:
@@ -694,71 +699,75 @@ class EDAProcessor:
                 return "Сильная связь"
             else:
                 return "Нет связи"
-
+        
         # 1. Корреляция для числовых признаков
         if target_column in numeric_columns:
-            pearson_corr = self.df[numeric_columns].corr(method='pearson')
-            spearman_corr = self.df[numeric_columns].corr(method='spearman')
-            kendall_corr = self.df[numeric_columns].corr(method='kendall')
-
+            correlations = {}
+            if 'pearson' in correlation_types:
+                correlations['pearson'] = self.df[numeric_columns].corr(method='pearson')
+            if 'spearman' in correlation_types:
+                correlations['spearman'] = self.df[numeric_columns].corr(method='spearman')
+            if 'kendall' in correlation_types:
+                correlations['kendall'] = self.df[numeric_columns].corr(method='kendall')
+            
             # Список для хранения пар с высокой корреляцией
             correlated_pairs = []
             processed_pairs = set()
-
+            
             for col1 in numeric_columns:
                 for col2 in numeric_columns:
                     if col1 != col2 and (col1, col2) not in processed_pairs and (col2, col1) not in processed_pairs:
-                        pearson_value = abs(pearson_corr.loc[col1, col2])
-                        spearman_value = abs(spearman_corr.loc[col1, col2])
-                        kendall_value = abs(kendall_corr.loc[col1, col2])
-
-                        # Рассчёт Cramér's V и Phi (только для бинарных данных)
-                        contingency_table = pd.crosstab(self.df[col1].round(), self.df[col2].round())
-                        chi2, _, _, _ = chi2_contingency(contingency_table)
-                        n = contingency_table.sum().sum()
-                        rows, cols = contingency_table.shape
-
-                        # Phi-коэффициент только для 2x2 таблиц
-                        if rows == 2 and cols == 2:
-                            phi_coefficient = np.sqrt(chi2 / n) if n > 0 else 0
-                        else:
-                            phi_coefficient = None
-
-                        # Рассчёт Cramér's V для любых таблиц
-                        min_dim = min(rows - 1, cols - 1)
-                        cramers_v = np.sqrt(chi2 / (n * min_dim)) if min_dim > 0 else None
-
-                        if (pearson_value >= threshold or
-                            spearman_value >= threshold or
-                            kendall_value >= threshold):
-
-                            correlated_pairs.append({
-                                "Признак 1": col1,
-                                "Признак 2": col2,
-                                "Корреляция Пирсона": round(pearson_value, 2),
-                                "Вывод по шкале Чеддока (Пирсон)": cheddock_scale(pearson_value),
-                                "Корреляция Спирмена": round(spearman_value, 2),
-                                "Вывод по шкале Чеддока (Спирмен)": cheddock_scale(spearman_value),
-                                "Корреляция Кендала": round(kendall_value, 2),
-                                "Вывод по шкале Чеддока (Кендалл)": cheddock_scale(kendall_value),
-                                "Phi-коэффициент": round(phi_coefficient, 2) if phi_coefficient is not None else None,
-                                "Cramer's V": round(cramers_v, 2) if cramers_v is not None else None
-                            })
+                        pair_data = {"Признак 1": col1, "Признак 2": col2}
+                        
+                        # Добавляем выбранные корреляции
+                        for corr_type in correlation_types:
+                            if corr_type in correlations:
+                                corr_value = abs(correlations[corr_type].loc[col1, col2])
+                                pair_data[f"Корреляция {corr_type.capitalize()}"] = round(corr_value, 2)
+                                pair_data[f"Вывод по шкале Чеддока ({corr_type.capitalize()})"] = cheddock_scale(corr_value)
+                        
+                        # Рассчитываем Phi-коэффициент и Cramér's V только если указано
+                        if include_phi or include_cramers_v:
+                            contingency_table = pd.crosstab(self.df[col1].round(), self.df[col2].round())
+                            chi2, _, _, _ = chi2_contingency(contingency_table)
+                            n = contingency_table.sum().sum()
+                            rows, cols = contingency_table.shape
+                            
+                            # Phi-коэффициент только для 2x2 таблиц
+                            if rows == 2 and cols == 2 and include_phi:
+                                phi_coefficient = np.sqrt(chi2 / n) if n > 0 else 0
+                                pair_data["Phi-коэффициент"] = round(phi_coefficient, 2)
+                            
+                            # Cramér's V для любых таблиц
+                            if include_cramers_v:
+                                min_dim = min(rows - 1, cols - 1)
+                                cramers_v = np.sqrt(chi2 / (n * min_dim)) if min_dim > 0 else None
+                                pair_data["Cramer's V"] = round(cramers_v, 2) if cramers_v is not None else None
+                        
+                        # Проверяем пороговое значение хотя бы для одной корреляции
+                        if any(pair_data.get(f"Корреляция {corr_type.capitalize()}") >= threshold for corr_type in correlation_types):
+                            correlated_pairs.append(pair_data)
                             processed_pairs.add((col1, col2))
-
+            
             # DataFrame с корреляциями
             correlated_df = pd.DataFrame(correlated_pairs).drop_duplicates(subset=["Признак 1", "Признак 2"])
+            
+            # Сортируем результаты по выбранной корреляции (если указано)
+            if len(correlation_types) > 0:
+                primary_corr_type = correlation_types[0]  # Берем первую корреляцию из списка
+                sort_column = f"Корреляция {primary_corr_type.capitalize()}"
+                if sort_column in correlated_df.columns:
+                    correlated_df = correlated_df.sort_values(by=sort_column, ascending=False)
+            
             results['correlations'] = correlated_df
-
+        
         # 2. ANOVA для категориального таргета
         elif target_column in categorical_columns:
             anova_results = []
-
             for col in numeric_columns:
                 unique_groups = self.df[target_column].dropna().unique()
                 if len(unique_groups) > 1:  # Проверка на достаточное количество групп
                     groups = [self.df[col][self.df[target_column] == group] for group in unique_groups]
-
                     # ANOVA тест
                     f_stat, p_value = f_oneway(*groups)
                     anova_results.append({
@@ -766,12 +775,10 @@ class EDAProcessor:
                         "F-статистика": round(f_stat, 2),
                         "P-значение": round(p_value, 4)
                     })
-
             results['anova'] = pd.DataFrame(anova_results)
-
+            
             # 3. Cramér's V для категориальных признаков
             cramers_v_results = []
-
             for col in categorical_columns:
                 if col != target_column:
                     contingency_table = pd.crosstab(self.df[col], self.df[target_column])
@@ -779,16 +786,14 @@ class EDAProcessor:
                     n = contingency_table.sum().sum()
                     rows, cols = contingency_table.shape
                     min_dim = min(rows - 1, cols - 1)
-
                     cramers_v = np.sqrt(chi2 / (n * min_dim)) if min_dim > 0 else None
                     cramers_v_results.append({
                         "Признак": col,
                         "Cramer's V": round(cramers_v, 2) if cramers_v is not None else None,
                         "Интерпретация (Cramer's V)": cramers_v_scale(cramers_v) if cramers_v is not None else "Нет связи"
                     })
-
             results['cramers_v'] = pd.DataFrame(cramers_v_results)
-
+        
         return results
 
     @timing
